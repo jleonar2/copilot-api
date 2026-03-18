@@ -66,7 +66,7 @@ export const translateChatCompletionsToResponsesPayload = (
         name: t.function.name,
         description: t.function.description ?? null,
         parameters: t.function.parameters,
-        strict: false as null,
+        strict: false as unknown as null,
       }))
     : null
 
