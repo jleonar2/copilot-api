@@ -232,8 +232,10 @@ export function normalizeProviderBaseUrl(url: string): string {
   return url.trim().replace(/\/+$/u, "")
 }
 
-export function getProviderConfig(name: string): ResolvedProviderConfig | null {
-  const providerName = name.trim()
+export function getProviderConfig(
+  name: string | undefined,
+): ResolvedProviderConfig | null {
+  const providerName = name?.trim() ?? ""
   if (!providerName) {
     return null
   }
