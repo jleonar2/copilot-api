@@ -359,11 +359,22 @@ const handleWithMessagesApi = async (
   const disableThink = toolChoice?.type === "any" || toolChoice?.type === "tool"
 
   if (selectedModel?.capabilities.supports.adaptive_thinking && !disableThink) {
-    anthropicPayload.thinking = {
-      type: "adaptive",
-    }
-    anthropicPayload.output_config = {
-      effort: getAnthropicEffortForModel(anthropicPayload.model),
+    // Check if thinking should be disabled based on effort config
+    const clientEffort = anthropicPayload.output_config?.effort
+    const configEffort = getReasoningEffortForModel(anthropicPayload.model)
+    const effectiveEffort = clientEffort || configEffort
+
+    // Skip thinking entirely if effort is "none" or "minimal"
+    if (effectiveEffort !== "none" && effectiveEffort !== "minimal") {
+      anthropicPayload.thinking = {
+        type: "adaptive",
+      }
+      // Respect client-specified effort if provided, otherwise use config default
+      if (!clientEffort) {
+        anthropicPayload.output_config = {
+          effort: getAnthropicEffortForModel(anthropicPayload.model),
+        }
+      }
     }
   }
 
