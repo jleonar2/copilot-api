@@ -6,7 +6,7 @@ import { networkInterfaces } from "node:os"
 
 import type { AnthropicMessagesPayload } from "~/routes/messages/anthropic-types"
 
-import { getModels } from "~/services/copilot/get-models"
+import { getModels, type Model } from "~/services/copilot/get-models"
 import { getVSCodeVersion } from "~/services/get-vscode-version"
 
 import { state } from "./state"
@@ -19,14 +19,107 @@ export const sleep = (ms: number) =>
 export const isNullish = (value: unknown): value is null | undefined =>
   value === null || value === undefined
 
+/**
+ * Creates Claude 4.5 model definitions for injection.
+ * These models are not returned by GitHub Copilot's /models endpoint for all account tiers,
+ * but they are available on the backend for certain accounts.
+ * Specifications match Claude 4.6 models but without adaptive_thinking support.
+ */
+const getClaude45Models = (): Array<Model> => {
+  return [
+    {
+      id: "claude-opus-4.5",
+      name: "Claude Opus 4.5",
+      vendor: "Anthropic",
+      version: "claude-opus-4.5",
+      object: "model",
+      preview: false,
+      model_picker_enabled: true,
+      supported_endpoints: ["/v1/messages", "/chat/completions"],
+      capabilities: {
+        family: "claude-opus-4.5",
+        type: "chat",
+        object: "model_capabilities",
+        tokenizer: "o200k_base",
+        limits: {
+          max_context_window_tokens: 200000,
+          max_non_streaming_output_tokens: 16000,
+          max_output_tokens: 64000,
+          max_prompt_tokens: 128000,
+          vision: {
+            max_prompt_image_size: 3145728,
+            max_prompt_images: 1,
+            supported_media_types: ["image/jpeg", "image/png", "image/webp"],
+          },
+        },
+        supports: {
+          tool_calls: true,
+          parallel_tool_calls: true,
+          streaming: true,
+          structured_outputs: true,
+          vision: true,
+          max_thinking_budget: 32000,
+          min_thinking_budget: 1024,
+        },
+      },
+    },
+    {
+      id: "claude-sonnet-4.5",
+      name: "Claude Sonnet 4.5",
+      vendor: "Anthropic",
+      version: "claude-sonnet-4.5",
+      object: "model",
+      preview: false,
+      model_picker_enabled: true,
+      supported_endpoints: ["/chat/completions", "/v1/messages"],
+      capabilities: {
+        family: "claude-sonnet-4.5",
+        type: "chat",
+        object: "model_capabilities",
+        tokenizer: "o200k_base",
+        limits: {
+          max_context_window_tokens: 200000,
+          max_non_streaming_output_tokens: 16000,
+          max_output_tokens: 32000,
+          max_prompt_tokens: 128000,
+          vision: {
+            max_prompt_image_size: 3145728,
+            max_prompt_images: 5,
+            supported_media_types: ["image/jpeg", "image/png", "image/webp"],
+          },
+        },
+        supports: {
+          tool_calls: true,
+          parallel_tool_calls: true,
+          streaming: true,
+          structured_outputs: true,
+          vision: true,
+          max_thinking_budget: 32000,
+          min_thinking_budget: 1024,
+        },
+      },
+    },
+  ]
+}
+
 export async function cacheModels(): Promise<void> {
   const models = await getModels()
+  const filteredModels = models.data.filter(
+    (model) =>
+      model.model_picker_enabled || model.capabilities.type === "embeddings",
+  )
+
+  const claude45Models = getClaude45Models()
+  const injectedModelIds = new Set(claude45Models.map((m) => m.id))
+
+  // Filter out any existing models with the same IDs to avoid duplicates
+  const uniqueModels = filteredModels.filter(
+    (model) => !injectedModelIds.has(model.id),
+  )
+
   state.models = {
     ...models,
-    data: models.data.filter(
-      (model) =>
-        model.model_picker_enabled || model.capabilities.type === "embeddings",
-    ),
+    data: [...uniqueModels, ...claude45Models],
   }
 }
 
