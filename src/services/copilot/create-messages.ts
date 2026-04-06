@@ -12,9 +12,11 @@ import {
   copilotHeaders,
   prepareForCompact,
   prepareInteractionHeaders,
+  prepareMessageProxyHeaders,
 } from "~/lib/api-config"
 import { HTTPError } from "~/lib/error"
 import { state } from "~/lib/state"
+import { parseUserIdMetadata } from "~/lib/utils"
 
 export type MessagesStream = ReturnType<typeof events>
 export type CreateMessagesReturn = AnthropicResponse | MessagesStream
@@ -70,11 +72,16 @@ export const createMessages = async (
 ): Promise<CreateMessagesReturn> => {
   if (!state.copilotToken) throw new Error("Copilot token not found")
 
-  const enableVision = payload.messages.some(
-    (message) =>
-      Array.isArray(message.content)
-      && message.content.some((block) => block.type === "image"),
-  )
+  const enableVision = payload.messages.some((message) => {
+    if (!Array.isArray(message.content)) return false
+    return message.content.some(
+      (block) =>
+        block.type === "image"
+        || (block.type === "tool_result"
+          && Array.isArray(block.content)
+          && block.content.some((inner) => inner.type === "image")),
+    )
+  })
 
   let isInitiateRequest = false
   const lastMessage = payload.messages.at(-1)
@@ -97,6 +104,14 @@ export const createMessages = async (
   )
 
   prepareForCompact(headers, options.isCompact)
+
+  const { safetyIdentifier, sessionId } = parseUserIdMetadata(
+    payload.metadata?.user_id,
+  )
+  // from claude code
+  if (safetyIdentifier && sessionId) {
+    prepareMessageProxyHeaders(headers)
+  }
 
   // align with vscode copilot extension anthropic-beta
   const anthropicBeta = buildAnthropicBetaHeader(

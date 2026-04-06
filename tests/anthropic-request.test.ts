@@ -4,6 +4,7 @@ import { z } from "zod"
 import type { AnthropicMessagesPayload } from "~/routes/messages/anthropic-types"
 
 import { translateToOpenAI } from "../src/routes/messages/non-stream-translation"
+import { isCompactRequest } from "../src/routes/messages/preprocess"
 
 // Zod schema for a single message in the chat completion request.
 const messageSchema = z.object({
@@ -60,6 +61,18 @@ const chatCompletionRequestSchema = z.object({
 function isValidChatCompletionRequest(payload: unknown): boolean {
   const result = chatCompletionRequestSchema.safeParse(payload)
   return result.success
+}
+
+function getTextParts(
+  content: string | Array<{ type: string; text?: string }> | null | undefined,
+): Array<string> {
+  if (!Array.isArray(content)) {
+    return typeof content === "string" ? [content] : []
+  }
+
+  return content.flatMap((part) =>
+    part.type === "text" && typeof part.text === "string" ? [part.text] : [],
+  )
 }
 
 describe("Anthropic to OpenAI translation logic", () => {
@@ -154,7 +167,7 @@ describe("Anthropic to OpenAI translation logic", () => {
     expect(assistantMessage?.reasoning_text).toContain(
       "Let me think about this simple math problem...",
     )
-    expect(assistantMessage?.content).toContain("2+2 equals 4.")
+    expect(getTextParts(assistantMessage?.content)).toContain("2+2 equals 4.")
   })
 
   test("should handle thinking blocks with tool calls", () => {
@@ -193,11 +206,119 @@ describe("Anthropic to OpenAI translation logic", () => {
     expect(assistantMessage?.reasoning_text).toContain(
       "I need to call the weather API",
     )
-    expect(assistantMessage?.content).toContain(
+    expect(getTextParts(assistantMessage?.content)).toContain(
       "I'll check the weather for you.",
     )
     expect(assistantMessage?.tool_calls).toHaveLength(1)
     expect(assistantMessage?.tool_calls?.[0].function.name).toBe("get_weather")
+  })
+
+  test("should map tool_reference tool results into chat tool messages", () => {
+    const anthropicPayload: AnthropicMessagesPayload = {
+      model: "gpt-4o",
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "tool_123",
+              content: [
+                {
+                  type: "tool_reference",
+                  tool_name: "AskUserQuestion",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      max_tokens: 100,
+    }
+
+    const openAIPayload = translateToOpenAI(anthropicPayload)
+
+    expect(openAIPayload.messages).toEqual([
+      {
+        role: "tool",
+        tool_call_id: "tool_123",
+        content: [
+          {
+            type: "text",
+            text: "Tool AskUserQuestion loaded",
+          },
+        ],
+      },
+    ])
+  })
+})
+
+describe("compact request detection", () => {
+  test("detects current compact summary prompts in string content", () => {
+    const anthropicPayload: AnthropicMessagesPayload = {
+      model: "claude-3-5-sonnet",
+      messages: [
+        {
+          role: "user",
+          content: `CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.\n\nYour task is to create a detailed summary of the conversation so far, paying close attention to the user's explicit requests and your previous actions.\n\n7. Pending Tasks:\n   - [Task 1]\n\n8. Current Work:\n   [Current work]`,
+        },
+      ],
+      max_tokens: 1024,
+    }
+
+    expect(isCompactRequest(anthropicPayload)).toBe(true)
+  })
+
+  test("detects compact prompts in user text blocks while ignoring system reminders", () => {
+    const anthropicPayload: AnthropicMessagesPayload = {
+      model: "claude-3-5-sonnet",
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "<system-reminder>\nThe user opened a file.\n</system-reminder>",
+            },
+            {
+              type: "text",
+              text: `CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.\n\nYour task is to create a detailed summary of the conversation so far, paying close attention to the user's explicit requests and your previous actions.\n\n7. Pending Tasks:\n   - [Task 1]\n\n8. Current Work:\n   [Current work]`,
+            },
+          ],
+        },
+      ],
+      max_tokens: 1024,
+    }
+
+    expect(isCompactRequest(anthropicPayload)).toBe(true)
+  })
+
+  test("does not treat ordinary user quotes as compact prompts", () => {
+    const anthropicPayload: AnthropicMessagesPayload = {
+      model: "claude-3-5-sonnet",
+      messages: [
+        {
+          role: "user",
+          content:
+            'Please explain this prompt: "Your task is to create a detailed summary of the conversation so far"',
+        },
+      ],
+      max_tokens: 1024,
+    }
+
+    expect(isCompactRequest(anthropicPayload)).toBe(false)
+  })
+
+  test("keeps legacy system prompt compact detection", () => {
+    const anthropicPayload: AnthropicMessagesPayload = {
+      model: "claude-3-5-sonnet",
+      system:
+        "You are a helpful AI assistant tasked with summarizing conversations for future continuation.",
+      messages: [{ role: "user", content: "continue" }],
+      max_tokens: 1024,
+    }
+
+    expect(isCompactRequest(anthropicPayload)).toBe(true)
   })
 })
 
